@@ -29,7 +29,6 @@ jobs:
       - name: Create deployment package (without node_modules)
         run: |
           mkdir -p deploy
-          cp -r dist deploy/
           cp -r src deploy/
           cp package*.json deploy/
           cp ecosystem.config.cjs deploy/
