@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      DATA_FILE: /app/data/tasks.json
+    volumes:
+      - ./data:/app/data
