@@ -11,12 +11,12 @@ module.exports = {
       out_file: './logs/out.log',
       env: {
         NODE_ENV: 'development',
-        PORT: 3002,
+        PORT: 5001,
         DATA_FILE: './data/tasks.json',
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 8000,
+        PORT: 5001,
         DATA_FILE: './data/tasks.json',
       },
     },

@@ -6,7 +6,10 @@
     "status": "done",
     "priority": "high",
     "dueDate": "2026-06-10",
-    "tags": ["setup", "devops"],
+    "tags": [
+      "setup",
+      "devops"
+    ],
     "createdAt": "2026-06-01T09:00:00.000Z",
     "updatedAt": "2026-06-10T14:30:00.000Z"
   },
@@ -14,12 +17,15 @@
     "id": "2",
     "title": "Design task board UI",
     "description": "Create wireframes for the kanban-style task board with filters",
-    "status": "in_progress",
+    "status": "done",
     "priority": "high",
     "dueDate": "2026-06-18",
-    "tags": ["design", "frontend"],
+    "tags": [
+      "design",
+      "frontend"
+    ],
     "createdAt": "2026-06-05T10:00:00.000Z",
-    "updatedAt": "2026-06-14T11:00:00.000Z"
+    "updatedAt": "2026-06-15T07:11:52.451Z"
   },
   {
     "id": "3",
@@ -28,7 +34,10 @@
     "status": "in_progress",
     "priority": "medium",
     "dueDate": "2026-06-20",
-    "tags": ["backend", "api"],
+    "tags": [
+      "backend",
+      "api"
+    ],
     "createdAt": "2026-06-08T08:00:00.000Z",
     "updatedAt": "2026-06-15T09:00:00.000Z"
   },
@@ -39,7 +48,10 @@
     "status": "todo",
     "priority": "medium",
     "dueDate": "2026-06-25",
-    "tags": ["devops", "aws"],
+    "tags": [
+      "devops",
+      "aws"
+    ],
     "createdAt": "2026-06-10T12:00:00.000Z",
     "updatedAt": "2026-06-10T12:00:00.000Z"
   },
@@ -50,7 +62,10 @@
     "status": "todo",
     "priority": "low",
     "dueDate": null,
-    "tags": ["backend", "security"],
+    "tags": [
+      "backend",
+      "security"
+    ],
     "createdAt": "2026-06-12T15:00:00.000Z",
     "updatedAt": "2026-06-12T15:00:00.000Z"
   }
