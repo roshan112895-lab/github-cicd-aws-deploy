@@ -1,74 +1,193 @@
-name: Deploy to AWS
+name: Deploy to EC2
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
-
-env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-  ECS_TASK_DEFINITION: ${{ secrets.ECS_TASK_DEFINITION }}
-  CONTAINER_NAME: api
+    branches: [main]
+  workflow_dispatch: # manual trigger
 
 jobs:
-  deploy:
-    name: Build, Push, and Deploy
+  build:
+    name: Build Application
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          node-version: "20.13.1"
+          cache: "npm"
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build, tag, and push image to ECR
-        id: build-image
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Create deployment package (without node_modules)
+        run: |
+          mkdir -p deploy
+          cp -r dist deploy/
+          cp -r src deploy/
+          cp package*.json deploy/
+          cp ecosystem.config.cjs deploy/
+          # Copy .env.example if exists
+          [ -f .env.example ] && cp .env.example deploy/ || echo "No .env.example found"
+          tar -czf deploy.tar.gz -C deploy .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: deploy.tar.gz
+          retention-days: 1
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-package
+
+      - name: Deploy to EC2 via SSH
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          # Create SSH key file
+          echo "$SSH_PRIVATE_KEY" > private_key.pem
+          chmod 600 private_key.pem
 
-      - name: Download current ECS task definition
+          # Copy deployment package to EC2
+          scp -i private_key.pem -o StrictHostKeyChecking=no \
+            deploy.tar.gz ${EC2_USERNAME}@${EC2_HOST}:/tmp/
+
+          # SSH into EC2 and deploy
+          ssh -i private_key.pem -o StrictHostKeyChecking=no \
+            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
+            
+            # Navigate to app directory
+            cd /var/www/express-app
+
+            # Fix ownership first (important!)
+            echo "Fixing directory ownership..."
+            sudo chown -R $USER:$USER /var/www/express-app
+            
+            
+            # Backup current version
+            if [ -d "dist" ]; then
+              timestamp=$(date +%Y%m%d_%H%M%S)
+              mkdir -p backups
+              tar -czf backups/backup_${timestamp}.tar.gz dist package.json ecosystem.config.cjs .env 2>/dev/null || true
+              # Keep only last 5 backups
+              ls -t backups/backup_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm
+            fi
+            
+            # Extract new version (this will overwrite existing files)
+            echo "Extracting new deployment package..."
+            tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
+            rm /tmp/deploy.tar.gz
+
+            # Fix ownership after extraction
+            sudo chown -R $USER:$USER /var/www/express-app
+            
+            
+            # Install production dependencies on the server
+            echo ""
+            echo "Installing production dependencies..."
+            npm ci
+            
+            # Create .env file if needed (only on first deploy)
+            if [ ! -f .env ]; then
+              echo "Creating default .env file..."
+              echo "NODE_ENV=production" > .env
+              echo "PORT=8000" >> .env
+            fi
+            
+            # Create logs directory
+            mkdir -p logs
+            
+            # Zero-downtime reload with PM2
+            if pm2 describe express-app > /dev/null 2>&1; then
+              echo "Reloading PM2 app (zero-downtime)..."
+              sudo pm2 reload ecosystem.config.cjs --update-env
+            else
+              echo "Starting new PM2 process..."
+              sudo pm2 start ecosystem.config.cjs
+            fi
+            
+            # Save PM2 process list
+            sudo pm2 save
+           
+          EOF
+
+          # Cleanup
+          rm private_key.pem
+
+      - name: Verify deployment
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          aws ecs describe-task-definition \
-            --task-definition "$ECS_TASK_DEFINITION" \
-            --query taskDefinition > task-definition.json
+          echo "Waiting for application to start..."
+          sleep 10
 
-      - name: Render new ECS task definition
-        id: render-task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: task-definition.json
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.build-image.outputs.image }}
+          # Check if app responds via nginx (try multiple times)
+          for i in {1..2}; do
+            echo "Attempt $i of 2..."
+            response=$(curl -s -o /dev/null -w "%{http_code}" http://${EC2_HOST} 2>/dev/null || echo "000")
+            
+            if [ "$response" = "200" ] || [ "$response" = "301" ] || [ "$response" = "302" ]; then
+              echo "✅ Deployment successful! App is responding with status: $response"
+              exit 0
+            fi
+            
+            echo "Got response: $response, waiting 5 seconds..."
+            sleep 5
+          done
 
-      - name: Deploy to Amazon ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+          echo "❌ Deployment verification failed after 2 attempts"
+          echo "Please check PM2 logs on the server"
+          exit 1
 
+      - name: Rollback on failure
+        if: failure()
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "🔄 Attempting to rollback to previous version..."
+
+          echo "$SSH_PRIVATE_KEY" > private_key.pem
+          chmod 600 private_key.pem
+
+          ssh -i private_key.pem -o StrictHostKeyChecking=no \
+            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
+            
+            cd /var/www/express-app
+
+            # Fix ownership first (important!)
+            sudo chown -R $USER:$USER /var/www/express-app
+            
+            # Find latest backup
+            latest_backup=$(ls -t backups/backup_*.tar.gz 2>/dev/null | head -1)
+            
+            if [ -n "$latest_backup" ]; then
+              echo "Found backup: $latest_backup"
+              tar -xzf "$latest_backup" -C /var/www/express-app
+              npm ci
+              pm2 reload ecosystem.config.cjs
+              echo "✅ Rolled back to previous version"
+            else
+              echo "⚠️ No backup found, cannot rollback"
+            fi
+          EOF
+
+          rm private_key.pem
