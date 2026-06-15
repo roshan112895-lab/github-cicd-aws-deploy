@@ -1,23 +1,27 @@
+const path = require('path');
+
 module.exports = {
   apps: [
     {
       name: 'express-app',
-      script: 'src/server.js',
+      script: path.join(__dirname, 'src/server.js'),
+      cwd: __dirname,
+      exec_mode: 'fork',
       instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '256M',
-      error_file: './logs/err.log',
-      out_file: './logs/out.log',
+      error_file: path.join(__dirname, 'logs/err.log'),
+      out_file: path.join(__dirname, 'logs/out.log'),
       env: {
         NODE_ENV: 'development',
-        PORT: 5001,
-        DATA_FILE: './data/tasks.json',
+        PORT: 3002,
+        DATA_FILE: path.join(__dirname, 'data/tasks.json'),
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 5001,
-        DATA_FILE: './data/tasks.json',
+        PORT: 8000,
+        DATA_FILE: path.join(__dirname, 'data/tasks.json'),
       },
     },
   ],
