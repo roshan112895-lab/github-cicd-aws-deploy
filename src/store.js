@@ -6,6 +6,9 @@ const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, '..', 'data', 't
 
 const STATUSES = ['todo', 'in_progress', 'done'];
 const PRIORITIES = ['low', 'medium', 'high'];
+const SORT_FIELDS = ['updatedAt', 'createdAt', 'dueDate', 'priority', 'title'];
+
+const PRIORITY_RANK = { high: 3, medium: 2, low: 1 };
 
 async function readTasks() {
   try {
@@ -25,7 +28,30 @@ async function writeTasks(tasks) {
   await fs.writeFile(DATA_FILE, JSON.stringify(tasks, null, 2), 'utf8');
 }
 
-function filterTasks(tasks, { status, priority, search }) {
+function sortTasks(tasks, sortBy = 'updatedAt') {
+  const field = SORT_FIELDS.includes(sortBy) ? sortBy : 'updatedAt';
+
+  return [...tasks].sort((a, b) => {
+    if (field === 'priority') {
+      return (PRIORITY_RANK[b.priority] || 0) - (PRIORITY_RANK[a.priority] || 0);
+    }
+
+    if (field === 'title') {
+      return a.title.localeCompare(b.title);
+    }
+
+    if (field === 'dueDate') {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return new Date(a.dueDate) - new Date(b.dueDate);
+    }
+
+    return new Date(b[field]) - new Date(a[field]);
+  });
+}
+
+function filterTasks(tasks, { status, priority, search, tag, sort }) {
   let result = tasks;
 
   if (status && STATUSES.includes(status)) {
@@ -36,17 +62,24 @@ function filterTasks(tasks, { status, priority, search }) {
     result = result.filter((task) => task.priority === priority);
   }
 
-  if (search) {
-    const query = search.toLowerCase();
-    result = result.filter(
-      (task) =>
-        task.title.toLowerCase().includes(query) ||
-        task.description.toLowerCase().includes(query) ||
-        task.tags.some((tag) => tag.toLowerCase().includes(query))
+  if (tag) {
+    const tagQuery = tag.toLowerCase();
+    result = result.filter((task) =>
+      (task.tags || []).some((t) => t.toLowerCase() === tagQuery)
     );
   }
 
-  return result.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  if (search) {
+    const query = search.toLowerCase();
+    result = result.filter((task) => {
+      const title = (task.title || '').toLowerCase();
+      const description = (task.description || '').toLowerCase();
+      const tags = (task.tags || []).some((t) => t.toLowerCase().includes(query));
+      return title.includes(query) || description.includes(query) || tags;
+    });
+  }
+
+  return sortTasks(result, sort);
 }
 
 async function getAllTasks(filters = {}) {
@@ -77,6 +110,29 @@ async function createTask(payload) {
   tasks.push(task);
   await writeTasks(tasks);
   return task;
+}
+
+async function duplicateTask(id) {
+  const tasks = await readTasks();
+  const source = tasks.find((task) => task.id === id);
+
+  if (!source) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const copy = {
+    ...source,
+    id: crypto.randomUUID(),
+    title: `${source.title} (copy)`,
+    status: 'todo',
+    createdAt: now,
+    updatedAt: now
+  };
+
+  tasks.push(copy);
+  await writeTasks(tasks);
+  return copy;
 }
 
 async function updateTask(id, payload) {
@@ -113,6 +169,31 @@ async function deleteTask(id) {
   return true;
 }
 
+async function deleteCompletedTasks() {
+  const tasks = await readTasks();
+  const remaining = tasks.filter((task) => task.status !== 'done');
+  const removed = tasks.length - remaining.length;
+
+  if (removed > 0) {
+    await writeTasks(remaining);
+  }
+
+  return removed;
+}
+
+async function getAllTags() {
+  const tasks = await readTasks();
+  const tagSet = new Set();
+
+  for (const task of tasks) {
+    for (const tag of task.tags || []) {
+      if (tag) tagSet.add(tag);
+    }
+  }
+
+  return [...tagSet].sort((a, b) => a.localeCompare(b));
+}
+
 async function getStats() {
   const tasks = await readTasks();
   const stats = {
@@ -120,17 +201,23 @@ async function getStats() {
     todo: 0,
     in_progress: 0,
     done: 0,
-    overdue: 0
+    overdue: 0,
+    dueToday: 0
   };
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10);
 
   for (const task of tasks) {
     stats[task.status] += 1;
 
     if (task.dueDate && task.status !== 'done') {
-      const due = new Date(task.dueDate);
+      if (task.dueDate === todayStr) {
+        stats.dueToday += 1;
+      }
+
+      const due = new Date(task.dueDate + 'T00:00:00');
       if (due < today) {
         stats.overdue += 1;
       }
@@ -143,10 +230,14 @@ async function getStats() {
 module.exports = {
   STATUSES,
   PRIORITIES,
+  SORT_FIELDS,
   getAllTasks,
   getTaskById,
   createTask,
+  duplicateTask,
   updateTask,
   deleteTask,
+  deleteCompletedTasks,
+  getAllTags,
   getStats
 };

@@ -68,5 +68,19 @@
     ],
     "createdAt": "2026-06-12T15:00:00.000Z",
     "updatedAt": "2026-06-12T15:00:00.000Z"
+  },
+  {
+    "id": "2e4c790a-43c8-46ca-9f36-1d13a7815428",
+    "title": "Set up project repository (copy)",
+    "description": "Initialize Git repo, add README, and configure .gitignore",
+    "status": "todo",
+    "priority": "high",
+    "dueDate": "2026-06-10",
+    "tags": [
+      "setup",
+      "devops"
+    ],
+    "createdAt": "2026-06-15T10:12:47.435Z",
+    "updatedAt": "2026-06-15T10:12:47.435Z"
   }
 ]

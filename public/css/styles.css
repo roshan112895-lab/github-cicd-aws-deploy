@@ -81,6 +81,36 @@ body {
   cursor: pointer;
   transition: all 0.15s;
   text-align: left;
+  width: 100%;
+}
+
+.nav-count {
+  margin-left: auto;
+  font-size: 0.75rem;
+  background: var(--bg);
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 12px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.nav-btn.active .nav-count {
+  background: rgba(99, 102, 241, 0.25);
+  color: var(--primary);
+}
+
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-block {
+  width: 100%;
+  justify-content: center;
+  font-size: 0.85rem;
+  padding: 9px 14px;
 }
 
 .nav-btn:hover {
@@ -107,21 +137,24 @@ body {
 .sidebar-stats {
   margin-top: auto;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 
 .stat-card {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 12px 8px;
   text-align: center;
 }
 
+.stat-card.stat-overdue .stat-value { color: var(--danger); }
+.stat-card.stat-today .stat-value { color: var(--warning); }
+
 .stat-value {
   display: block;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
 }
 
@@ -277,6 +310,28 @@ body {
   border-color: var(--primary);
 }
 
+.task-card.overdue-card {
+  border-left: 3px solid var(--danger);
+}
+
+.task-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.task-card:hover .task-actions {
+  opacity: 1;
+}
+
 .task-checkbox {
   width: 22px;
   height: 22px;
@@ -395,6 +450,12 @@ body {
   border-color: transparent;
 }
 
+.badge-due.due-today {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  border-color: transparent;
+}
+
 .tag {
   background: var(--bg);
   color: var(--text-muted);
@@ -505,6 +566,21 @@ body {
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid var(--border);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.modal-footer-left {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-meta-info {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: -8px;
+  margin-bottom: 8px;
 }
 
 .modal-footer-right {

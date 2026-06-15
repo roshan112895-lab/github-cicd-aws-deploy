@@ -18,12 +18,16 @@ app.get('/api', (_req, res) => {
     endpoints: {
       health: 'GET /health',
       stats: 'GET /api/tasks/stats',
-      listTasks: 'GET /api/tasks?status=&priority=&search=',
+      tags: 'GET /api/tasks/tags',
+      export: 'GET /api/tasks/export',
+      listTasks: 'GET /api/tasks?status=&priority=&search=&tag=&sort=',
       getTask: 'GET /api/tasks/:id',
       createTask: 'POST /api/tasks',
+      duplicateTask: 'POST /api/tasks/:id/duplicate',
       updateTask: 'PUT /api/tasks/:id',
       patchTask: 'PATCH /api/tasks/:id',
-      deleteTask: 'DELETE /api/tasks/:id'
+      deleteTask: 'DELETE /api/tasks/:id',
+      clearCompleted: 'DELETE /api/tasks/completed'
     }
   });
 });

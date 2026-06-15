@@ -84,14 +84,59 @@ router.get('/stats', async (_req, res, next) => {
   }
 });
 
+router.get('/tags', async (_req, res, next) => {
+  try {
+    const tags = await store.getAllTags();
+    res.json({ data: tags });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/export', async (_req, res, next) => {
+  try {
+    const tasks = await store.getAllTasks();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="tasks-export.json"');
+    res.json({ exportedAt: new Date().toISOString(), tasks });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/completed', async (_req, res, next) => {
+  try {
+    const removed = await store.deleteCompletedTasks();
+    res.json({ data: { removed } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/', async (req, res, next) => {
   try {
     const tasks = await store.getAllTasks({
       status: req.query.status,
       priority: req.query.priority,
-      search: req.query.search
+      search: req.query.search,
+      tag: req.query.tag,
+      sort: req.query.sort
     });
     res.json({ data: tasks });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/duplicate', async (req, res, next) => {
+  try {
+    const task = await store.duplicateTask(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    res.status(201).json({ data: task });
   } catch (error) {
     next(error);
   }
