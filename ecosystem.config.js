@@ -1,5 +1,7 @@
 const path = require('path');
 
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
 module.exports = {
   apps: [
     {
@@ -15,9 +17,12 @@ module.exports = {
       out_file: path.join(__dirname, 'logs/out.log'),
       env: {
         NODE_ENV: 'production',
-        PORT: 5001,
-        DATA_FILE: path.join(__dirname, 'data/tasks.json'),
-      },
-    },
-  ],
+        PORT: process.env.PORT || 5001,
+        DATABASE_URL: process.env.DATABASE_URL,
+        DIRECT_URL: process.env.DIRECT_URL || process.env.DATABASE_URL,
+        AUTH_TOKEN_SECRET: process.env.AUTH_TOKEN_SECRET,
+        AUTH_TOKEN_TTL: process.env.AUTH_TOKEN_TTL || '86400'
+      }
+    }
+  ]
 };

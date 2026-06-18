@@ -1,6 +1,10 @@
+require('dotenv').config();
+
 const express = require('express');
 const path = require('path');
 const tasksRouter = require('./routes/tasks');
+const authRouter = require('./routes/auth');
+const { connectDatabase } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -17,6 +21,9 @@ app.get('/api', (_req, res) => {
     message: 'Task Management API is running',
     endpoints: {
       health: 'GET /health',
+      register: 'POST /api/auth/register',
+      login: 'POST /api/auth/login',
+      profile: 'GET /api/auth/me',
       stats: 'GET /api/tasks/stats',
       tags: 'GET /api/tasks/tags',
       export: 'GET /api/tasks/export',
@@ -32,6 +39,7 @@ app.get('/api', (_req, res) => {
   });
 });
 
+app.use('/api/auth', authRouter);
 app.use('/api/tasks', tasksRouter);
 
 app.use((_req, res) => {
@@ -43,16 +51,27 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Task Manager running at http://localhost:${PORT}`);
-});
+async function start() {
+  try {
+    await connectDatabase();
 
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`Port ${PORT} is already in use. Stop the other process or run with PORT=<number>.`);
+    const server = app.listen(PORT, () => {
+      console.log(`Task Manager running at http://localhost:${PORT}`);
+    });
+
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Stop the other process or run with PORT=<number>.`);
+        process.exit(1);
+      }
+
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    });
+  } catch (error) {
+    console.error('Failed to connect PostgreSQL:', error.message);
     process.exit(1);
   }
+}
 
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+start();

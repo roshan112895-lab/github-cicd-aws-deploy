@@ -1,8 +1,4 @@
-const fs = require('fs/promises');
-const path = require('path');
-const crypto = require('crypto');
-
-const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, '..', 'data', 'tasks.json');
+const { pool } = require('./db');
 
 const STATUSES = ['todo', 'in_progress', 'done'];
 const PRIORITIES = ['low', 'medium', 'high'];
@@ -10,22 +6,18 @@ const SORT_FIELDS = ['updatedAt', 'createdAt', 'dueDate', 'priority', 'title'];
 
 const PRIORITY_RANK = { high: 3, medium: 2, low: 1 };
 
-async function readTasks() {
-  try {
-    const raw = await fs.readFile(DATA_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      await writeTasks([]);
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function writeTasks(tasks) {
-  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+function normalizeTask(task) {
+  return {
+    id: String(task.id),
+    title: task.title,
+    description: task.description || '',
+    status: task.status,
+    priority: task.priority,
+    dueDate: task.due_date || task.dueDate || null,
+    tags: task.tags || [],
+    createdAt: task.created_at || task.createdAt,
+    updatedAt: task.updated_at || task.updatedAt
+  };
 }
 
 function sortTasks(tasks, sortBy = 'updatedAt') {
@@ -83,119 +75,130 @@ function filterTasks(tasks, { status, priority, search, tag, sort }) {
 }
 
 async function getAllTasks(filters = {}) {
-  const tasks = await readTasks();
-  return filterTasks(tasks, filters);
+  const result = await pool.query(
+    `SELECT id, title, description, status, priority, due_date, tags, created_at, updated_at
+     FROM tasks`
+  );
+  return filterTasks(result.rows.map(normalizeTask), filters);
 }
 
 async function getTaskById(id) {
-  const tasks = await readTasks();
-  return tasks.find((task) => task.id === id) || null;
+  const result = await pool.query(
+    `SELECT id, title, description, status, priority, due_date, tags, created_at, updated_at
+     FROM tasks
+     WHERE id = $1
+     LIMIT 1`,
+    [id]
+  );
+  return result.rowCount ? normalizeTask(result.rows[0]) : null;
 }
 
 async function createTask(payload) {
-  const tasks = await readTasks();
-  const now = new Date().toISOString();
-  const task = {
-    id: crypto.randomUUID(),
-    title: payload.title,
-    description: payload.description || '',
-    status: payload.status || 'todo',
-    priority: payload.priority || 'medium',
-    dueDate: payload.dueDate || null,
-    tags: payload.tags || [],
-    createdAt: now,
-    updatedAt: now
-  };
-
-  tasks.push(task);
-  await writeTasks(tasks);
-  return task;
+  const result = await pool.query(
+    `INSERT INTO tasks (title, description, status, priority, due_date, tags)
+     VALUES ($1, $2, $3, $4, $5, $6::text[])
+     RETURNING id, title, description, status, priority, due_date, tags, created_at, updated_at`,
+    [
+      payload.title,
+      payload.description || '',
+      payload.status || 'todo',
+      payload.priority || 'medium',
+      payload.dueDate || null,
+      payload.tags || []
+    ]
+  );
+  return normalizeTask(result.rows[0]);
 }
 
 async function duplicateTask(id) {
-  const tasks = await readTasks();
-  const source = tasks.find((task) => task.id === id);
-
+  const source = await getTaskById(id);
   if (!source) {
     return null;
   }
 
-  const now = new Date().toISOString();
-  const copy = {
-    ...source,
-    id: crypto.randomUUID(),
+  const copy = await createTask({
     title: `${source.title} (copy)`,
+    description: source.description || '',
     status: 'todo',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  tasks.push(copy);
-  await writeTasks(tasks);
+    priority: source.priority || 'medium',
+    dueDate: source.dueDate || null,
+    tags: source.tags || []
+  });
   return copy;
 }
 
 async function updateTask(id, payload) {
-  const tasks = await readTasks();
-  const index = tasks.findIndex((task) => task.id === id);
+  const sets = [];
+  const values = [];
+  let index = 1;
 
-  if (index === -1) {
-    return null;
+  if (payload.title !== undefined) {
+    sets.push(`title = $${index++}`);
+    values.push(payload.title);
+  }
+  if (payload.description !== undefined) {
+    sets.push(`description = $${index++}`);
+    values.push(payload.description);
+  }
+  if (payload.status !== undefined) {
+    sets.push(`status = $${index++}`);
+    values.push(payload.status);
+  }
+  if (payload.priority !== undefined) {
+    sets.push(`priority = $${index++}`);
+    values.push(payload.priority);
+  }
+  if (payload.dueDate !== undefined) {
+    sets.push(`due_date = $${index++}`);
+    values.push(payload.dueDate);
+  }
+  if (payload.tags !== undefined) {
+    sets.push(`tags = $${index++}::text[]`);
+    values.push(payload.tags);
   }
 
-  const updatedTask = {
-    ...tasks[index],
-    ...payload,
-    id: tasks[index].id,
-    createdAt: tasks[index].createdAt,
-    updatedAt: new Date().toISOString()
-  };
+  if (!sets.length) {
+    return getTaskById(id);
+  }
 
-  tasks[index] = updatedTask;
-  await writeTasks(tasks);
-  return updatedTask;
+  sets.push('updated_at = NOW()');
+  values.push(id);
+
+  const result = await pool.query(
+    `UPDATE tasks
+     SET ${sets.join(', ')}
+     WHERE id = $${index}
+     RETURNING id, title, description, status, priority, due_date, tags, created_at, updated_at`,
+    values
+  );
+  return result.rowCount ? normalizeTask(result.rows[0]) : null;
 }
 
 async function deleteTask(id) {
-  const tasks = await readTasks();
-  const index = tasks.findIndex((task) => task.id === id);
-
-  if (index === -1) {
-    return false;
-  }
-
-  tasks.splice(index, 1);
-  await writeTasks(tasks);
-  return true;
+  const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+  return result.rowCount > 0;
 }
 
 async function deleteCompletedTasks() {
-  const tasks = await readTasks();
-  const remaining = tasks.filter((task) => task.status !== 'done');
-  const removed = tasks.length - remaining.length;
-
-  if (removed > 0) {
-    await writeTasks(remaining);
-  }
-
-  return removed;
+  const result = await pool.query(`DELETE FROM tasks WHERE status = 'done'`);
+  return result.rowCount || 0;
 }
 
 async function getAllTags() {
-  const tasks = await readTasks();
-  const tagSet = new Set();
-
-  for (const task of tasks) {
-    for (const tag of task.tags || []) {
-      if (tag) tagSet.add(tag);
-    }
-  }
-
-  return [...tagSet].sort((a, b) => a.localeCompare(b));
+  const result = await pool.query(
+    `SELECT DISTINCT unnest(tags) AS tag
+     FROM tasks
+     WHERE array_length(tags, 1) > 0`
+  );
+  return result.rows.map((r) => r.tag).filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
 async function getStats() {
-  const tasks = await readTasks();
+  const result = await pool.query(
+    `SELECT id, title, description, status, priority, due_date, tags, created_at, updated_at
+     FROM tasks`
+  );
+  const tasks = result.rows.map(normalizeTask);
   const stats = {
     total: tasks.length,
     todo: 0,

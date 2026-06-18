@@ -1,0 +1,10 @@
+[
+  {
+    "id": "62ce32ec-b588-499a-b79b-49289caedcf1",
+    "email": "demo@example.com",
+    "name": "Demo",
+    "passwordHash": "4c6568b2e952a395366c995e14e16b8e:143a5b5a0ae873f380c6f53048bb237a0e5f028cd4b733a95896b913a5ebc1089c06df76675ab03b7d6dedb9748b0ec1aa95ac30a1e06dc743b3ed27a5bd0f68",
+    "createdAt": "2026-06-16T08:51:49.543Z",
+    "updatedAt": "2026-06-16T08:51:49.543Z"
+  }
+]

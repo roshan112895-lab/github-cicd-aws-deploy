@@ -26,7 +26,7 @@ jobs:
       - name: Create deployment package
         run: |
           mkdir -p deploy
-          cp -r src public deploy/
+          cp -r src public scripts deploy/
           cp package.json package-lock.json ecosystem.config.js deploy/
           tar -czf deploy.tar.gz -C deploy .
 
@@ -53,6 +53,10 @@ jobs:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          AUTH_TOKEN_SECRET: ${{ secrets.AUTH_TOKEN_SECRET }}
+          AUTH_TOKEN_TTL: ${{ secrets.AUTH_TOKEN_TTL }}
         run: |
           echo "$SSH_PRIVATE_KEY" > private_key.pem
           chmod 600 private_key.pem
@@ -61,50 +65,51 @@ jobs:
             deploy.tar.gz ${EC2_USERNAME}@${EC2_HOST}:/tmp/
 
           ssh -i private_key.pem -o StrictHostKeyChecking=no \
-            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
-            set -e
-            cd /var/www/express-app
+            ${EC2_USERNAME}@${EC2_HOST} << EOF
+          set -e
+          cd /var/www/express-app
 
-            echo "Fixing directory ownership..."
-            sudo chown -R $USER:$USER /var/www/express-app
+          echo "Fixing directory ownership..."
+          sudo chown -R \$USER:\$USER /var/www/express-app
 
-            if [ -f data/tasks.json ]; then
-              cp data/tasks.json /tmp/tasks.json.bak
-            fi
+          if [ -d src ]; then
+            timestamp=\$(date +%Y%m%d_%H%M%S)
+            mkdir -p backups
+            tar -czf "backups/backup_\${timestamp}.tar.gz" \
+              src public scripts package.json package-lock.json ecosystem.config.js .env 2>/dev/null || true
+            ls -t backups/backup_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm
+          fi
 
-            if [ -d src ]; then
-              timestamp=$(date +%Y%m%d_%H%M%S)
-              mkdir -p backups
-              tar -czf backups/backup_${timestamp}.tar.gz \
-                src public package.json package-lock.json ecosystem.config.js data 2>/dev/null || true
-              ls -t backups/backup_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm
-            fi
+          echo "Extracting new deployment package..."
+          tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
+          rm /tmp/deploy.tar.gz
 
-            echo "Extracting new deployment package..."
-            tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
-            rm /tmp/deploy.tar.gz
+          echo "Writing production .env (Supabase)..."
+          printf '%s\n' \
+            "PORT=5001" \
+            "NODE_ENV=production" \
+            "DATABASE_URL=${DATABASE_URL}" \
+            "DIRECT_URL=${DIRECT_URL}" \
+            "AUTH_TOKEN_SECRET=${AUTH_TOKEN_SECRET}" \
+            "AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL:-86400}" \
+            > .env
 
-            if [ -f /tmp/tasks.json.bak ]; then
-              mkdir -p data
-              cp /tmp/tasks.json.bak data/tasks.json
-              rm /tmp/tasks.json.bak
-            fi
+          sudo chown -R \$USER:\$USER /var/www/express-app
+          mkdir -p logs
 
-            sudo chown -R $USER:$USER /var/www/express-app
-            mkdir -p logs data
+          echo "Installing production dependencies..."
+          npm ci --omit=dev
 
-            echo "Installing production dependencies..."
-            npm ci --omit=dev
+          if pm2 describe express-app > /dev/null 2>&1; then
+            echo "Reloading PM2 app..."
+            pm2 reload ecosystem.config.js --update-env
+          else
+            echo "Starting PM2 app..."
+            pm2 start ecosystem.config.js
+          fi
 
-            if pm2 describe express-app > /dev/null 2>&1; then
-              echo "Reloading PM2 app..."
-              pm2 reload ecosystem.config.js --update-env
-            else
-              echo "Starting PM2 app..."
-              pm2 start ecosystem.config.js
-            fi
-
-            pm2 save
+          pm2 save
+          echo "Deploy complete."
           EOF
 
           rm private_key.pem
@@ -122,6 +127,11 @@ jobs:
             health=$(curl -s "http://${EC2_HOST}/health" 2>/dev/null || echo "")
             if echo "$health" | grep -q '"status":"ok"'; then
               echo "Health check passed: $health"
+
+              tasks=$(curl -s "http://${EC2_HOST}/api/tasks" 2>/dev/null || echo "")
+              if echo "$tasks" | grep -q '"data"'; then
+                echo "API check passed: /api/tasks responded"
+              fi
               exit 0
             fi
 
@@ -152,21 +162,21 @@ jobs:
 
           ssh -i private_key.pem -o StrictHostKeyChecking=no \
             ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
-            cd /var/www/express-app
-            sudo chown -R $USER:$USER /var/www/express-app
+          cd /var/www/express-app
+          sudo chown -R $USER:$USER /var/www/express-app
 
-            latest_backup=$(ls -t backups/backup_*.tar.gz 2>/dev/null | head -1)
+          latest_backup=$(ls -t backups/backup_*.tar.gz 2>/dev/null | head -1)
 
-            if [ -n "$latest_backup" ]; then
-              echo "Restoring backup: $latest_backup"
-              tar -xzf "$latest_backup" -C /var/www/express-app
-              npm ci --omit=dev
-              pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
-              pm2 save
-              echo "Rollback complete"
-            else
-              echo "No backup found, cannot rollback"
-            fi
+          if [ -n "$latest_backup" ]; then
+            echo "Restoring backup: $latest_backup"
+            tar -xzf "$latest_backup" -C /var/www/express-app
+            npm ci --omit=dev
+            pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
+            pm2 save
+            echo "Rollback complete"
+          else
+            echo "No backup found, cannot rollback"
+          fi
           EOF
 
           rm private_key.pem
