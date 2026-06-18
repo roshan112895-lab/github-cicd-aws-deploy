@@ -1,63 +1,93 @@
-## Deploy the Node.js backend to an EC2 instance using an automated GitHub Actions CI/CD workflow
+# TaskFlow — EC2 Deployment Guide
 
-After setting up the EC2 instance and configuring security groups, follow these steps to deploy the application:
+Deploy the TaskFlow app to AWS EC2 with **nginx**, **PM2**, **GitHub Actions**, and **Supabase** (production database).
 
-#### Setp 1: First update & upgrade the packages on your EC2 instance:
+## Architecture
+
+```
+Browser → EC2:80 (nginx) → localhost:5001 (PM2/Node) → Supabase PostgreSQL
+```
+
+| Component | Role |
+|-----------|------|
+| **nginx** | Public HTTP on port 80 |
+| **PM2** | Keeps Node.js running on port **5001** |
+| **GitHub Actions** | Auto-deploy on push to `main` |
+| **Supabase** | Production database (not installed on EC2) |
+| **pgAdmin4** | Local development database only |
+
+---
+
+## Part 1 — AWS EC2 setup (one time)
+
+### 1.1 Launch instance
+
+- AMI: **Ubuntu 22.04 or 24.04 LTS**
+- Instance type: `t2.micro` or larger
+- Create/download a `.pem` key pair
+
+### 1.2 Security group inbound rules
+
+| Type | Port | Source |
+|------|------|--------|
+| SSH | 22 | Your IP (recommended) |
+| HTTP | 80 | `0.0.0.0/0` |
+
+> **Note:** Use `http://` in the browser, not `https://`. Port 443 is only needed if you add SSL later.
+
+### 1.3 Elastic IP (recommended)
+
+Allocate and associate an Elastic IP so the public address does not change after restart.
+
+---
+
+## Part 2 — Server bootstrap (one time)
+
+SSH into EC2:
+
+```bash
+ssh -i "your-key.pem" ubuntu@YOUR_EC2_IP
+```
+
+### 2.1 Update system and install dependencies
 
 ```bash
 sudo apt update && sudo apt upgrade -y
+
+# Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs git nginx
+
+node -v   # v20.x
+npm -v
+
+# PM2
+sudo npm install -g pm2
 ```
 
-#### Step 2: Install Node.js and npm on your EC2 instance:
+### 2.2 Create app directory
 
 ```bash
-sudo apt-get install npm -y
-sudo npm i -g n
-sudo n lts # sudo n 22.0.1
-```
-
-**After that exit your instance and relogin to check the new node js version**
-
-#### Step 3: Now Install the Nginx server on your EC2 instance:
-
-```bash
-sudo apt install nginx -y
-
-# Start and enable Nginx
-sudo systemctl start nginx
-sudo systemctl enable nginx
-
-# Check status
-sudo systemctl status nginx
-
-```
-
-#### Step 4: Setup Deployment Directory Structure
-
-```bash
-# Create app directory
-sudo mkdir -p /var/www/express-app
-# If you want to set ownership to ubuntu user
-# sudo chown -R ubuntu:ubuntu /var/www/express-app
+sudo mkdir -p /var/www/express-app/logs
+sudo chown -R ubuntu:ubuntu /var/www/express-app
 cd /var/www/express-app
 ```
 
-#### Step 5: Configure Nginx as Reverse Proxy
+### 2.3 Configure nginx
 
 ```bash
-# Create Nginx configuration file
 sudo nano /etc/nginx/sites-available/express-app
 ```
 
-##### Paste the following configuration:
+Paste:
 
 ```nginx
 server {
     listen 80;
-    server_name YOUR_EC2_PUBLIC_IP;  # Replace with your IP or domain
+    server_name YOUR_EC2_IP_OR_DOMAIN;
 
     location / {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://127.0.0.1:5001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -67,265 +97,262 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_cache_bypass $http_upgrade;
 
-        # Timeouts
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
 }
-
 ```
 
-##### Enable the Configuration
+Enable site:
 
 ```bash
-# Create symbolic link
-sudo ln -s /etc/nginx/sites-available/express-app /etc/nginx/sites-enabled/
-
-# Remove default configuration
-sudo rm /etc/nginx/sites-enabled/default
-
-# Test Nginx configuration
+sudo ln -sf /etc/nginx/sites-available/express-app /etc/nginx/sites-enabled/express-app
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
-
-# Restart Nginx
 sudo systemctl restart nginx
+sudo systemctl enable nginx
 ```
 
-#### Step 6: install PM2 to manage the Node.js application
+### 2.4 PM2 startup on boot
 
 ```bash
-sudo npm install -g pm2
-
-## Generate the start script using PM2
-sudo pm2 startup
+pm2 startup
+# Run the command it prints, then:
+pm2 save
 ```
 
-After this run your application using PM2 in the deployment script and use this command to start the server with PM2:
+---
+
+## Part 3 — Production environment (Supabase)
+
+On EC2, create `/var/www/express-app/.env`:
 
 ```bash
-sudo pm2 start ecosystem.config.js
-
-## Save the PM2
-sudo pm2 save
+cd /var/www/express-app
+nano .env
 ```
 
-#### Step 7: Create GitHub Secrets for Deployment
+```env
+PORT=5001
+NODE_ENV=production
+DATABASE_URL=postgresql://postgres.[PROJECT-REF]:[ENCODED-PASSWORD]@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true
+DIRECT_URL=postgresql://postgres.[PROJECT-REF]:[ENCODED-PASSWORD]@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
+AUTH_TOKEN_SECRET=your-strong-random-secret
+AUTH_TOKEN_TTL=86400
+```
 
-In your GitHub repository, go to Settings → Secrets and variables → Actions → New repository secret.
+**Important:**
 
-Add These Secrets
+- Get connection strings from **Supabase → Project Settings → Database**
+- URL-encode special characters in password (`@` → `%40`, `#` → `%23`)
+- `DATABASE_URL` must contain `supabase.com` — **not** `127.0.0.1`
 
-**EC2_HOST - Your EC2 public IP address:**
-**EC2_USERNAME - EC2 user (ubuntu for Ubuntu AMI):**
-**EC2_SSH_KEY - Your private SSH key content:**
+Verify:
 
 ```bash
-# On your local machine, copy the entire key
-cat ec2-deploy-key.pem
-
-# Copy ALL content including:
-# -----BEGIN RSA PRIVATE KEY-----
-# ... key content ...
-# -----END RSA PRIVATE KEY-----
+grep DATABASE_URL .env
 ```
 
-#### Step 8: Create GitHub Actions Workflow
+### Migrate seed data to Supabase (one time, from local machine)
 
-In your repository, create .github/workflows/deploy.yml
+```bash
+npm run migrate:supabase
+```
 
-```yml
-name: Deploy to EC2
+---
 
-on:
-  push:
-    branches: [main]
-  workflow_dispatch: # manual trigger
+## Part 4 — GitHub Secrets
 
-jobs:
-  build:
-    name: Build Application
-    runs-on: ubuntu-latest
+Repo → **Settings → Secrets and variables → Actions**:
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+| Secret | Description |
+|--------|-------------|
+| `EC2_HOST` | EC2 public IP or DNS (e.g. `35.172.192.6`) |
+| `EC2_USERNAME` | `ubuntu` |
+| `EC2_SSH_KEY` | Full `.pem` private key contents |
+| `DATABASE_URL` | Supabase transaction pooler URI (port 6543) |
+| `DIRECT_URL` | Supabase session pooler URI (port 5432) |
+| `AUTH_TOKEN_SECRET` | Strong random string for auth tokens |
+| `AUTH_TOKEN_TTL` | `86400` (optional) |
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20.13.1"
-          cache: "npm"
+Copy SSH key from local machine:
 
-      - name: Install dependencies
-        run: npm ci
+```bash
+cat your-key.pem
+# Copy ALL content including BEGIN/END lines
+```
 
-      - name: Build TypeScript
-        run: npm run build
+---
 
-      - name: Create deployment package (without node_modules)
-        run: |
-          mkdir -p deploy
-          cp -r dist deploy/
-          cp -r src deploy/
-          cp package*.json deploy/
-          cp ecosystem.config.cjs deploy/
-          # Copy .env.example if exists
-          [ -f .env.example ] && cp .env.example deploy/ || echo "No .env.example found"
-          tar -czf deploy.tar.gz -C deploy .
+## Part 5 — GitHub Actions deploy
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-package
-          path: deploy.tar.gz
-          retention-days: 1
+Workflow file: `.github/workflows/deploy-aws.yml`
 
-  deploy:
-    name: Deploy to EC2
-    needs: build
-    runs-on: ubuntu-latest
+### Trigger deploy
 
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: deployment-package
+- Push to `main`, or
+- GitHub → **Actions** → **Deploy to EC2** → **Run workflow**
 
-      - name: Deploy to EC2 via SSH
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          # Create SSH key file
-          echo "$SSH_PRIVATE_KEY" > private_key.pem
-          chmod 600 private_key.pem
+### What the workflow does
 
-          # Copy deployment package to EC2
-          scp -i private_key.pem -o StrictHostKeyChecking=no \
-            deploy.tar.gz ${EC2_USERNAME}@${EC2_HOST}:/tmp/
+1. Builds deployment package (`src`, `public`, `scripts`, `ecosystem.config.js`)
+2. SSH to EC2 and extracts files to `/var/www/express-app`
+3. Writes `.env` from GitHub Secrets (Supabase)
+4. Runs `npm ci --omit=dev`
+5. `pm2 reload ecosystem.config.js --update-env`
+6. Verifies `/health` and `/api/tasks`
 
-          # SSH into EC2 and deploy
-          ssh -i private_key.pem -o StrictHostKeyChecking=no \
-            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
-            
-            # Navigate to app directory
-            cd /var/www/express-app
+---
 
-            # Fix ownership first (important!)
-            echo "Fixing directory ownership..."
-            sudo chown -R $USER:$USER /var/www/express-app
-            
-            
-            # Backup current version
-            if [ -d "dist" ]; then
-              timestamp=$(date +%Y%m%d_%H%M%S)
-              mkdir -p backups
-              tar -czf backups/backup_${timestamp}.tar.gz dist package.json ecosystem.config.cjs .env 2>/dev/null || true
-              # Keep only last 5 backups
-              ls -t backups/backup_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm
-            fi
-            
-            # Extract new version (this will overwrite existing files)
-            echo "Extracting new deployment package..."
-            tar --overwrite -xzf /tmp/deploy.tar.gz -C /var/www/express-app
-            rm /tmp/deploy.tar.gz
+## Part 6 — PM2 commands
 
-            # Fix ownership after extraction
-            sudo chown -R $USER:$USER /var/www/express-app
-            
-            
-            # Install production dependencies on the server
-            echo ""
-            echo "Installing production dependencies..."
-            npm ci
-            
-            # Create .env file if needed (only on first deploy)
-            if [ ! -f .env ]; then
-              echo "Creating default .env file..."
-              echo "NODE_ENV=production" > .env
-              echo "PORT=8000" >> .env
-            fi
-            
-            # Create logs directory
-            mkdir -p logs
-            
-            # Zero-downtime reload with PM2
-            if pm2 describe express-app > /dev/null 2>&1; then
-              echo "Reloading PM2 app (zero-downtime)..."
-              sudo pm2 reload ecosystem.config.cjs --update-env
-            else
-              echo "Starting new PM2 process..."
-              sudo pm2 start ecosystem.config.cjs
-            fi
-            
-            # Save PM2 process list
-            sudo pm2 save
-           
-          EOF
+After first deploy or manual setup:
 
-          # Cleanup
-          rm private_key.pem
+```bash
+cd /var/www/express-app
+npm ci --omit=dev
 
-      - name: Verify deployment
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          echo "Waiting for application to start..."
-          sleep 10
+# First start
+pm2 start ecosystem.config.js
+pm2 save
 
-          # Check if app responds via nginx (try multiple times)
-          for i in {1..2}; do
-            echo "Attempt $i of 2..."
-            response=$(curl -s -o /dev/null -w "%{http_code}" http://${EC2_HOST} 2>/dev/null || echo "000")
-            
-            if [ "$response" = "200" ] || [ "$response" = "301" ] || [ "$response" = "302" ]; then
-              echo "✅ Deployment successful! App is responding with status: $response"
-              exit 0
-            fi
-            
-            echo "Got response: $response, waiting 5 seconds..."
-            sleep 5
-          done
+# After updates
+pm2 reload ecosystem.config.js --update-env
+```
 
-          echo "❌ Deployment verification failed after 2 attempts"
-          echo "Please check PM2 logs on the server"
-          exit 1
+Useful commands:
 
-      - name: Rollback on failure
-        if: failure()
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          echo "🔄 Attempting to rollback to previous version..."
+```bash
+pm2 status
+pm2 logs express-app --lines 50
+pm2 restart express-app
+pm2 delete express-app
+```
 
-          echo "$SSH_PRIVATE_KEY" > private_key.pem
-          chmod 600 private_key.pem
+Expected logs:
 
-          ssh -i private_key.pem -o StrictHostKeyChecking=no \
-            ${EC2_USERNAME}@${EC2_HOST} << 'EOF'
-            
-            cd /var/www/express-app
+```text
+PostgreSQL connected (Supabase)
+Task Manager running at http://localhost:5001
+```
 
-            # Fix ownership first (important!)
-            sudo chown -R $USER:$USER /var/www/express-app
-            
-            # Find latest backup
-            latest_backup=$(ls -t backups/backup_*.tar.gz 2>/dev/null | head -1)
-            
-            if [ -n "$latest_backup" ]; then
-              echo "Found backup: $latest_backup"
-              tar -xzf "$latest_backup" -C /var/www/express-app
-              npm ci
-              pm2 reload ecosystem.config.cjs
-              echo "✅ Rolled back to previous version"
-            else
-              echo "⚠️ No backup found, cannot rollback"
-            fi
-          EOF
+---
 
-          rm private_key.pem
+## Part 7 — Verify deployment
+
+### On EC2
+
+```bash
+curl http://localhost:5001/health
+curl http://localhost:5001/api/tasks
+curl http://localhost/health
+pm2 status
+```
+
+### From browser
+
+Use **HTTP** (not HTTPS):
+
+```
+http://YOUR_EC2_IP
+http://ec2-XX-XX-XX-XX.compute-1.amazonaws.com
+```
+
+### From local machine
+
+```bash
+curl http://YOUR_EC2_IP/health
+curl http://YOUR_EC2_IP/api/tasks
+```
+
+---
+
+## Part 8 — Local development
+
+Local uses **pgAdmin4 / PostgreSQL**, not Supabase.
+
+`.env` on your machine:
+
+```env
+PORT=5001
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/taskFlowDb
+AUTH_TOKEN_SECRET=change-this-secret-in-production
+AUTH_TOKEN_TTL=86400
+```
+
+```bash
+npm install
+npm run start:dev
+# http://localhost:5001
+```
+
+Useful scripts:
+
+```bash
+npm run db:check              # Test local DB
+npm run db:check:supabase     # Test Supabase connection
+npm run migrate:postgres      # JSON → local Postgres
+npm run migrate:supabase      # JSON → Supabase
+```
+
+---
+
+## Troubleshooting
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `ERR_CONNECTION_TIMED_OUT` | Browser using HTTPS | Use `http://` not `https://` |
+| `ECONNREFUSED 127.0.0.1:5432` | Missing Supabase URL in `.env` | Add `DATABASE_URL` with `supabase.com` |
+| `502 Bad Gateway` | PM2 app not running | `pm2 start ecosystem.config.js` |
+| `502 Bad Gateway` | Wrong nginx port | `proxy_pass http://127.0.0.1:5001` |
+| PM2 `errored` | Missing dependencies | `npm ci --omit=dev` |
+| Empty tasks in UI | Supabase empty | Run `npm run migrate:supabase` locally |
+| Deploy SSH fails | Wrong secrets | Update `EC2_HOST` and `EC2_SSH_KEY` |
+
+### Reset PM2
+
+```bash
+cd /var/www/express-app
+pm2 delete express-app
+pm2 start ecosystem.config.js
+pm2 save
+pm2 logs express-app
+```
+
+### nginx logs
+
+```bash
+sudo tail -f /var/log/nginx/error.log
+```
+
+---
+
+## Optional — HTTPS with custom domain
+
+1. Point domain A record to EC2 IP
+2. Open port 443 in security group
+3. Update nginx `server_name` to your domain
+4. Run Certbot:
+
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+```
+
+---
+
+## Quick reference
+
+| Environment | Database | Config | URL |
+|-------------|----------|--------|-----|
+| Local | pgAdmin4 / PostgreSQL | `.env` | `http://localhost:5001` |
+| Production | Supabase | EC2 `.env` + GitHub Secrets | `http://EC2_IP` |
+
+```bash
+# Deploy
+git push origin main
+
+# Manual PM2 reload on EC2
+cd /var/www/express-app && pm2 reload ecosystem.config.js --update-env
 ```
